@@ -10,6 +10,12 @@ import java.awt.*;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.Optional;
+import javax.swing.filechooser.FileNameExtensionFilter;
+import java.io.File;
+import java.io.FileWriter;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.StandardCopyOption;
 
 public class MainFrame extends JFrame {
     private final WineDAO wineDAO;
@@ -17,6 +23,7 @@ public class MainFrame extends JFrame {
     private final DefaultListModel<Wine> listModel;
     private final JPanel formPanel;
     private final StatsPanel statsPanel;
+    private final WineTablePanel tablePanel;
 
     // Composants du formulaire
     private final JTextField nameField;
@@ -25,7 +32,159 @@ public class MainFrame extends JFrame {
     private final JTextArea descriptionArea;
     private final JSpinner quantitySpinner;
 
+    private void createMenuBar() {
+        JMenuBar menuBar = new JMenuBar();
+
+        // Menu Fichier
+        JMenu fileMenu = new JMenu("Fichier");
+
+        JMenuItem exportItem = new JMenuItem("Exporter en CSV");
+        exportItem.addActionListener(e -> exportToCSV());
+
+        JMenuItem importItem = new JMenuItem("Importer depuis CSV");
+        importItem.addActionListener(e -> importFromCSV());
+
+        JMenuItem addPhotoItem = new JMenuItem("Ajouter une photo");
+        addPhotoItem.addActionListener(e -> addPhoto());
+
+        fileMenu.add(exportItem);
+        fileMenu.add(importItem);
+        fileMenu.addSeparator();
+        fileMenu.add(addPhotoItem);
+
+        menuBar.add(fileMenu);
+        setJMenuBar(menuBar);
+    }
+
+    private void exportToCSV() {
+        JFileChooser fileChooser = new JFileChooser();
+        fileChooser.setDialogTitle("Exporter la cave");
+        fileChooser.setFileFilter(new FileNameExtensionFilter("Fichiers CSV", "csv"));
+
+        if (fileChooser.showSaveDialog(this) == JFileChooser.APPROVE_OPTION) {
+            String filePath = fileChooser.getSelectedFile().getPath();
+            if (!filePath.toLowerCase().endsWith(".csv")) {
+                filePath += ".csv";
+            }
+
+            try (FileWriter writer = new FileWriter(filePath)) {
+                // En-tête du CSV
+                writer.write("Nom,Année,Prix,Quantité,Description,Date d'achat\n");
+
+                // Données
+                List<Wine> wines = wineDAO.findAll();
+                for (Wine wine : wines) {
+                    writer.write(String.format("%s,%d,%.2f,%d,\"%s\",%s\n",
+                            wine.getName(),
+                            wine.getProductionYear(),
+                            wine.getPrice(),
+                            wine.getQuantity(),
+                            wine.getDescription().replace("\"", "\"\""),
+                            wine.getPurchaseDate()
+                    ));
+                }
+
+                JOptionPane.showMessageDialog(this,
+                        "Export réussi !",
+                        "Succès",
+                        JOptionPane.INFORMATION_MESSAGE);
+            } catch (IOException e) {
+                JOptionPane.showMessageDialog(this,
+                        "Erreur lors de l'export : " + e.getMessage(),
+                        "Erreur",
+                        JOptionPane.ERROR_MESSAGE);
+            }
+        }
+    }
+
+    private void importFromCSV() {
+        JFileChooser fileChooser = new JFileChooser();
+        fileChooser.setDialogTitle("Importer un fichier CSV");
+        fileChooser.setFileFilter(new FileNameExtensionFilter("Fichiers CSV", "csv"));
+
+        if (fileChooser.showOpenDialog(this) == JFileChooser.APPROVE_OPTION) {
+            try {
+                String content = Files.readString(fileChooser.getSelectedFile().toPath());
+                String[] lines = content.split("\n");
+
+                // Ignorer l'en-tête
+                for (int i = 1; i < lines.length; i++) {
+                    String[] values = lines[i].split(",(?=(?:[^\"]*\"[^\"]*\")*[^\"]*$)");
+                    if (values.length >= 5) {
+                        Wine wine = new Wine();
+                        wine.setName(values[0].trim());
+                        wine.setProductionYear(Integer.parseInt(values[1].trim()));
+                        wine.setPrice(Double.parseDouble(values[2].trim()));
+                        wine.setQuantity(Integer.parseInt(values[3].trim()));
+                        wine.setDescription(values[4].replace("\"", "").trim());
+                        if (values.length > 5) {
+                            wine.setPurchaseDate(LocalDate.parse(values[5].trim()));
+                        }
+                        wineDAO.create(wine);
+                    }
+                }
+
+                refreshWineList();
+                JOptionPane.showMessageDialog(this,
+                        "Import réussi !",
+                        "Succès",
+                        JOptionPane.INFORMATION_MESSAGE);
+            } catch (Exception e) {
+                JOptionPane.showMessageDialog(this,
+                        "Erreur lors de l'import : " + e.getMessage(),
+                        "Erreur",
+                        JOptionPane.ERROR_MESSAGE);
+            }
+        }
+    }
+
+    private void addPhoto() {
+        Wine selectedWine = wineList.getSelectedValue();
+        if (selectedWine == null) {
+            JOptionPane.showMessageDialog(this,
+                    "Veuillez sélectionner un vin d'abord",
+                    "Information",
+                    JOptionPane.INFORMATION_MESSAGE);
+            return;
+        }
+
+        JFileChooser fileChooser = new JFileChooser();
+        fileChooser.setDialogTitle("Sélectionner une photo");
+        fileChooser.setFileFilter(new FileNameExtensionFilter(
+                "Images", "jpg", "jpeg", "png", "gif"));
+
+        if (fileChooser.showOpenDialog(this) == JFileChooser.APPROVE_OPTION) {
+            try {
+                File source = fileChooser.getSelectedFile();
+                String extension = source.getName().substring(source.getName().lastIndexOf('.'));
+                File destination = new File("photos/" + selectedWine.getId() + extension);
+
+                // Créer le dossier photos s'il n'existe pas
+                destination.getParentFile().mkdirs();
+
+                // Copier le fichier
+                Files.copy(source.toPath(), destination.toPath(),
+                        StandardCopyOption.REPLACE_EXISTING);
+
+                // Mettre à jour le chemin de l'image dans la base de données
+                selectedWine.setImage(destination.getPath());
+                wineDAO.update(selectedWine);
+
+                JOptionPane.showMessageDialog(this,
+                        "Photo ajoutée avec succès !",
+                        "Succès",
+                        JOptionPane.INFORMATION_MESSAGE);
+            } catch (IOException e) {
+                JOptionPane.showMessageDialog(this,
+                        "Erreur lors de l'ajout de la photo : " + e.getMessage(),
+                        "Erreur",
+                        JOptionPane.ERROR_MESSAGE);
+            }
+        }
+    }
+
     public MainFrame() {
+
         wineDAO = new WineDAOSQLite();
 
         // Configuration de la fenêtre
@@ -33,6 +192,7 @@ public class MainFrame extends JFrame {
         setSize(1200, 700);
         setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
         setLocationRelativeTo(null);
+        createMenuBar();
 
         // Création du panel principal avec des marges
         JPanel mainPanel = new JPanel(new BorderLayout(20, 20));
@@ -120,9 +280,28 @@ public class MainFrame extends JFrame {
         rightPanel.add(formPanel);
         rightPanel.add(statsScrollPane);
 
-        // Ajout des panels principaux
-        mainPanel.add(leftPanel, BorderLayout.WEST);
-        mainPanel.add(rightPanel, BorderLayout.CENTER);
+        // Création des composants principaux
+        JTabbedPane tabbedPane = new JTabbedPane();
+
+        // Onglet "Vue Simple"
+        JPanel simpleViewPanel = new JPanel(new BorderLayout(20, 20));
+        simpleViewPanel.add(leftPanel, BorderLayout.WEST);
+        simpleViewPanel.add(rightPanel, BorderLayout.CENTER);
+
+        // Onglet "Vue Détaillée"
+        JPanel detailedViewPanel = new JPanel(new BorderLayout(10, 10));
+        // Dans la partie où vous créez les panneaux dans MainFrame
+        tablePanel = new WineTablePanel();
+        FilterPanel filterPanel = new FilterPanel();
+        filterPanel.setTablePanel(tablePanel);
+        detailedViewPanel.add(filterPanel, BorderLayout.WEST);
+        detailedViewPanel.add(tablePanel, BorderLayout.CENTER);
+
+        // Ajout des onglets
+        tabbedPane.addTab("Vue Simple", new ImageIcon(), simpleViewPanel, "Vue simple avec liste");
+        tabbedPane.addTab("Vue Détaillée", new ImageIcon(), detailedViewPanel, "Vue détaillée avec tableau");
+
+        mainPanel.add(tabbedPane, BorderLayout.CENTER);
 
         add(mainPanel);
 
@@ -248,6 +427,7 @@ public class MainFrame extends JFrame {
         listModel.clear();
         allWines.forEach(listModel::addElement);
         statsPanel.updateStats(allWines);
+        tablePanel.updateWines(allWines);
     }
 
     public static void main(String[] args) {
